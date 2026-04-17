@@ -1,7 +1,7 @@
-#include <catch2/catch_all.hpp>
-#include "resource_error.hpp"
 #include "file_handle.hpp"
+#include "resource_error.hpp"
 #include "resource_manager.hpp"
+#include <catch2/catch_all.hpp>
 #include <filesystem>
 #include <fstream>
 #include <string>
