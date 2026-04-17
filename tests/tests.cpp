@@ -1,7 +1,7 @@
-#include "file_handle.hpp"
-#include "resource_error.hpp"
-#include "resource_manager.hpp"
 #include <catch2/catch_all.hpp>
+#include "resource_error.hpp"
+#include "file_handle.hpp"
+#include "resource_manager.hpp"
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -9,7 +9,6 @@
 namespace fs = std::filesystem;
 using namespace lab4::resource;
 
-// Вспомогательная функция для создания тестового файла
 void create_test_file(const std::string& filename, const std::string& content)
 {
     std::ofstream file(filename);
@@ -17,12 +16,10 @@ void create_test_file(const std::string& filename, const std::string& content)
     file.close();
 }
 
-#pragma region FileHandleTests
 TEST_CASE("FileHandle: Constructor and RAII", "[file][raii]")
 {
     const std::string filename = "test_raii.txt";
 
-    // Удаляем файл перед тестом, если существует
     if (fs::exists(filename))
     {
         fs::remove(filename);
@@ -32,11 +29,10 @@ TEST_CASE("FileHandle: Constructor and RAII", "[file][raii]")
         FileHandle fh(filename, "w");
         REQUIRE(fh.is_open());
         fh.write("RAII is working");
-    } // Деструктор автоматически закроет файл
+    }
 
     REQUIRE(fs::exists(filename));
 
-    // Проверяем содержимое
     std::ifstream ifs(filename);
     std::string content;
     std::getline(ifs, content);
@@ -60,7 +56,8 @@ TEST_CASE("FileHandle: Move Semantics", "[file][move]")
         REQUIRE(fh2.is_open());
         REQUIRE_FALSE(fh1.is_open());
 
-        std::string content = fh2.read(16);
+        fh2.seek(0);
+        std::string content = fh2.read(100);
         REQUIRE(content == "Move test content");
     }
 
@@ -78,9 +75,7 @@ TEST_CASE("FileHandle: Move Semantics", "[file][move]")
 
     fs::remove(filename);
 }
-#pragma endregion
 
-#pragma region ResourceErrorTests
 TEST_CASE("ResourceError: Exception handling", "[error][exception]")
 {
     const std::string invalid_path = "/non/existent/path/parmezan.txt";
@@ -95,7 +90,7 @@ TEST_CASE("ResourceError: Exception handling", "[error][exception]")
         try
         {
             FileHandle fh(invalid_path, "r");
-            REQUIRE(false); // Не должно дойти сюда
+            REQUIRE(false);
         }
         catch (const ResourceError& e)
         {
@@ -118,9 +113,7 @@ TEST_CASE("ResourceError: Exception handling", "[error][exception]")
         fs::remove(filename);
     }
 }
-#pragma endregion
 
-#pragma region ResourceManagerTests
 TEST_CASE("ResourceManager: Shared Ownership and Caching", "[manager][shared]")
 {
     const std::string path = "shared_test.txt";
@@ -144,13 +137,11 @@ TEST_CASE("ResourceManager: Shared Ownership and Caching", "[manager][shared]")
             auto ptr = manager.get_file(path);
             REQUIRE(ptr.use_count() == 1);
             REQUIRE(manager.cache_size() == 1);
-        } // ptr уничтожается, weak_ptr истекает
+        }
 
-        // Кеш всё ещё содержит weak_ptr, но is_cached вернёт false
         REQUIRE(manager.cache_size() == 1);
         REQUIRE_FALSE(manager.is_cached(path));
 
-        // При следующем запросе создастся новый объект
         auto ptr_new = manager.get_file(path);
         REQUIRE(ptr_new.use_count() == 1);
         REQUIRE(manager.cache_size() == 1);
@@ -187,21 +178,19 @@ TEST_CASE("ResourceManager: Cleanup logic", "[manager][cleanup]")
 
     SECTION("cleanup_expired removes only expired entries")
     {
-        auto f2 = manager.get_file(path2); // Оставляем живым
+        auto f2 = manager.get_file(path2);
 
         {
             auto f1 = manager.get_file(path1);
             REQUIRE(manager.cache_size() == 2);
-        } // f1 уничтожается
+        }
 
-        // До очистки в кеше 2 записи
         REQUIRE(manager.cache_size() == 2);
         REQUIRE_FALSE(manager.is_cached(path1));
         REQUIRE(manager.is_cached(path2));
 
         manager.cleanup_expired();
 
-        // После очистки остаётся только path2
         REQUIRE(manager.cache_size() == 1);
         REQUIRE_FALSE(manager.is_cached(path1));
         REQUIRE(manager.is_cached(path2));
@@ -234,7 +223,7 @@ TEST_CASE("ResourceManager: File operations through cached handles", "[manager][
         fh1->seek(0);
 
         auto fh2 = manager.get_file(path);
-        std::string content = fh2->read(15);
+        std::string content = fh2->read(100);
 
         REQUIRE(content == "Updated content");
         REQUIRE(fh1 == fh2);
@@ -242,4 +231,3 @@ TEST_CASE("ResourceManager: File operations through cached handles", "[manager][
 
     fs::remove(path);
 }
-#pragma endregion
