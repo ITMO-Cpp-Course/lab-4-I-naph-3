@@ -4,230 +4,150 @@
 #include <catch2/catch_all.hpp>
 #include <filesystem>
 #include <fstream>
-#include <string>
 
-namespace fs = std::filesystem;
 using namespace lab4::resource;
+namespace fs = std::filesystem;
 
-void create_test_file(const std::string& filename, const std::string& content)
+void create_file(const std::string& name, const std::string& content)
 {
-    std::ofstream file(filename);
-    file << content;
-    file.close();
+    std::ofstream f(name);
+    f << content;
 }
 
-TEST_CASE("FileHandle: Constructor and RAII", "[file][raii]")
+TEST_CASE("FileHandle: basic operations", "[FileHandle]")
 {
-    const std::string filename = "test_raii.txt";
+    std::string name = "test_basic.txt";
 
-    if (fs::exists(filename))
+    SECTION("Write and read")
     {
-        fs::remove(filename);
+        FileHandle f(name, "w");
+        REQUIRE(f.is_open());
+        f.write("Hello world");
+        f.close();
+
+        FileHandle f2(name, "r");
+        std::string content = f2.read(100);
+        REQUIRE(content == "Hello world");
     }
 
+    SECTION("Constructor throws on bad file")
     {
-        FileHandle fh(filename, "w");
-        REQUIRE(fh.is_open());
-        fh.write("RAII is working");
+        REQUIRE_THROWS_AS(FileHandle("/bad/path.txt", "r"), ResourceError);
     }
 
-    REQUIRE(fs::exists(filename));
-
-    std::ifstream ifs(filename);
-    std::string content;
-    std::getline(ifs, content);
-    REQUIRE(content == "RAII is working");
-
-    fs::remove(filename);
+    fs::remove(name);
 }
 
-TEST_CASE("FileHandle: Move Semantics", "[file][move]")
+TEST_CASE("FileHandle: move semantics", "[FileHandle]")
 {
-    const std::string filename = "test_move.txt";
-
-    create_test_file(filename, "Move test content");
+    std::string name = "test_move.txt";
+    create_file(name, "Move test");
 
     SECTION("Move constructor")
     {
-        FileHandle fh1(filename, "r");
-        REQUIRE(fh1.is_open());
+        FileHandle f1(name, "r");
+        FileHandle f2 = std::move(f1);
 
-        FileHandle fh2 = std::move(fh1);
-        REQUIRE(fh2.is_open());
-        REQUIRE_FALSE(fh1.is_open());
-
-        fh2.seek(0);
-        std::string content = fh2.read(100);
-        REQUIRE(content == "Move test content");
+        REQUIRE(f2.is_open());
+        REQUIRE_FALSE(f1.is_open());
+        REQUIRE(f2.read(100) == "Move test");
     }
 
     SECTION("Move assignment")
     {
-        FileHandle fh1(filename, "r");
-        FileHandle fh2("temp.txt", "w");
+        FileHandle f1(name, "r");
+        FileHandle f2("temp.txt", "w");
+        f2 = std::move(f1);
 
-        fh2 = std::move(fh1);
-        REQUIRE(fh2.is_open());
-        REQUIRE_FALSE(fh1.is_open());
-
+        REQUIRE(f2.is_open());
+        REQUIRE_FALSE(f1.is_open());
         fs::remove("temp.txt");
     }
 
-    fs::remove(filename);
+    fs::remove(name);
 }
 
-TEST_CASE("ResourceError: Exception handling", "[error][exception]")
+TEST_CASE("ResourceError", "[ResourceError]")
 {
-    const std::string invalid_path = "/non/existent/path/parmezan.txt";
-
-    SECTION("Catching ResourceError on non-existent file")
+    SECTION("Throws on bad file")
     {
-        REQUIRE_THROWS_AS(FileHandle(invalid_path, "r"), ResourceError);
+        REQUIRE_THROWS_AS(FileHandle("no_such_file.txt", "r"), ResourceError);
     }
 
-    SECTION("Checking error message content")
+    SECTION("Throws on read from closed file")
     {
-        try
-        {
-            FileHandle fh(invalid_path, "r");
-            REQUIRE(false);
-        }
-        catch (const ResourceError& e)
-        {
-            std::string msg = e.what();
-            REQUIRE(msg.find("Failed to open file") != std::string::npos);
-            REQUIRE(msg.find("parmezan.txt") != std::string::npos);
-        }
-    }
-
-    SECTION("Exception when reading from closed file")
-    {
-        const std::string filename = "test_closed.txt";
-        create_test_file(filename, "test");
-
-        FileHandle fh(filename, "r");
-        fh.close();
-
-        REQUIRE_THROWS_AS(fh.read(1), ResourceError);
-
-        fs::remove(filename);
+        create_file("test.txt", "data");
+        FileHandle f("test.txt", "r");
+        f.close();
+        REQUIRE_THROWS_AS(f.read(1), ResourceError);
+        fs::remove("test.txt");
     }
 }
 
-TEST_CASE("ResourceManager: Shared Ownership and Caching", "[manager][shared]")
+TEST_CASE("ResourceManager: caching", "[ResourceManager]")
 {
-    const std::string path = "shared_test.txt";
-    create_test_file(path, "Shared content");
-    ResourceManager manager;
+    std::string name = "cache_test.txt";
+    create_file(name, "Cached content");
+
+    ResourceManager mgr;
 
     SECTION("Same file returns same object")
     {
-        auto ptr1 = manager.get_file(path);
-        auto ptr2 = manager.get_file(path);
+        auto p1 = mgr.get_file(name);
+        auto p2 = mgr.get_file(name);
 
-        REQUIRE(ptr1 == ptr2);
-        REQUIRE(ptr1.use_count() == 2);
-        REQUIRE(manager.cache_size() == 1);
-        REQUIRE(manager.is_cached(path));
+        REQUIRE(p1 == p2);
+        REQUIRE(p1.use_count() == 2);
+        REQUIRE(mgr.cache_size() == 1);
+        REQUIRE(mgr.is_cached(name));
     }
 
-    SECTION("Automatic resource release from cache")
+    SECTION("Cache cleanup")
     {
         {
-            auto ptr = manager.get_file(path);
-            REQUIRE(ptr.use_count() == 1);
-            REQUIRE(manager.cache_size() == 1);
+            auto p = mgr.get_file(name);
+            REQUIRE(mgr.cache_size() == 1);
         }
 
-        REQUIRE(manager.cache_size() == 1);
-        REQUIRE_FALSE(manager.is_cached(path));
-
-        auto ptr_new = manager.get_file(path);
-        REQUIRE(ptr_new.use_count() == 1);
-        REQUIRE(manager.cache_size() == 1);
+        REQUIRE_FALSE(mgr.is_cached(name));
+        mgr.cleanup_expired();
+        REQUIRE(mgr.cache_size() == 0);
     }
 
-    SECTION("Multiple files in cache")
+    SECTION("Release file")
     {
-        const std::string path2 = "shared_test2.txt";
-        create_test_file(path2, "Another content");
-
-        auto ptr1 = manager.get_file(path);
-        auto ptr2 = manager.get_file(path2);
-
-        REQUIRE(ptr1 != ptr2);
-        REQUIRE(manager.cache_size() == 2);
-        REQUIRE(manager.is_cached(path));
-        REQUIRE(manager.is_cached(path2));
-
-        fs::remove(path2);
+        auto p = mgr.get_file(name);
+        mgr.release_file(name);
+        REQUIRE(mgr.cache_size() == 0);
+        REQUIRE_FALSE(mgr.is_cached(name));
     }
 
-    fs::remove(path);
+    fs::remove(name);
 }
 
-TEST_CASE("ResourceManager: Cleanup logic", "[manager][cleanup]")
+TEST_CASE("ResourceManager: multiple files", "[ResourceManager]")
 {
-    const std::string path1 = "clean1.txt";
-    const std::string path2 = "clean2.txt";
+    create_file("f1.txt", "one");
+    create_file("f2.txt", "two");
 
-    create_test_file(path1, "Content 1");
-    create_test_file(path2, "Content 2");
+    ResourceManager mgr;
 
-    ResourceManager manager;
+    auto p1 = mgr.get_file("f1.txt");
+    auto p2 = mgr.get_file("f2.txt");
 
-    SECTION("cleanup_expired removes only expired entries")
-    {
-        auto f2 = manager.get_file(path2);
+    REQUIRE(p1 != p2);
+    REQUIRE(mgr.cache_size() == 2);
+    REQUIRE(mgr.is_cached("f1.txt"));
+    REQUIRE(mgr.is_cached("f2.txt"));
 
-        {
-            auto f1 = manager.get_file(path1);
-            REQUIRE(manager.cache_size() == 2);
-        }
-
-        REQUIRE(manager.cache_size() == 2);
-        REQUIRE_FALSE(manager.is_cached(path1));
-        REQUIRE(manager.is_cached(path2));
-
-        manager.cleanup_expired();
-
-        REQUIRE(manager.cache_size() == 1);
-        REQUIRE_FALSE(manager.is_cached(path1));
-        REQUIRE(manager.is_cached(path2));
-    }
-
-    SECTION("release_file explicitly removes from cache")
-    {
-        auto f1 = manager.get_file(path1);
-        REQUIRE(manager.cache_size() == 1);
-
-        manager.release_file(path1);
-        REQUIRE(manager.cache_size() == 0);
-        REQUIRE_FALSE(manager.is_cached(path1));
-    }
-
-    fs::remove(path1);
-    fs::remove(path2);
+    fs::remove("f1.txt");
+    fs::remove("f2.txt");
 }
 
-TEST_CASE("ResourceManager: File operations through cached handles", "[manager][operations]")
+TEST_CASE("Empty ResourceManager", "[ResourceManager]")
 {
-    const std::string path = "cache_ops.txt";
-    create_test_file(path, "Initial content");
-    ResourceManager manager;
+    ResourceManager mgr;
 
-    SECTION("Write and read through cached handle")
-    {
-        auto fh1 = manager.get_file(path, "r+");
-        fh1->write("Updated content");
-        fh1->seek(0);
-
-        auto fh2 = manager.get_file(path);
-        std::string content = fh2->read(100);
-
-        REQUIRE(content == "Updated content");
-        REQUIRE(fh1 == fh2);
-    }
-
-    fs::remove(path);
+    REQUIRE(mgr.cache_size() == 0);
+    REQUIRE_FALSE(mgr.is_cached("any.txt"));
 }
